@@ -1,5 +1,12 @@
 {
-  "host": "127.0.0.1",
-  "port": 11111,
-  "password": ""
+    "futu_opend": {
+        "host": "127.0.0.1",
+        "port": 11111
+    },
+    "storage": {
+        "base_archive_dir": "./data/archive",
+        "base_report_dir": "./data/reports",
+        "flush_threshold": 2000,
+        "compression": "snappy"
+    }
 }

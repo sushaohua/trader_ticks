@@ -1,48 +1,178 @@
-"""
-Daily Report Generator - Read daily Parquet files and generate Markdown reports.
-"""
+import os
+import json
+import glob
+import pandas as pd
+from datetime import datetime, timedelta
 
-from datetime import date
+# =====================================================================
+# 🛠️ 智能相对路径锚定（工业级避坑设计）
+# =====================================================================
+# 1. 无论在哪里拉起脚本，先获取当前文件(daily_report.py)的绝对物理路径
+CURRENT_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# 2. 自动逆向推导出项目的根目录绝对物理地址 (即 analyzer/ 的上一级)
+PROJECT_ROOT_DIR = os.path.dirname(CURRENT_SCRIPT_DIR)
+
+# 3. 动态拼接并锁定唯一的全局设置 json 相对路径
+SETTINGS_JSON_PATH = os.path.join(PROJECT_ROOT_DIR, "configs", "futu_settings.json")
 
 
-class DailyReportGenerator:
-    """Generate daily analysis reports from Parquet data."""
-    
-    def __init__(self, data_dir: str):
-        """
-        Initialize report generator.
+def load_project_settings(config_path):
+    """安全解析全局配置文件"""
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"🚨 核心配置文件未找到: {config_path}")
+    with open(config_path, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+
+def run_micro_structure_audit(parquet_path, k_ticks=15):
+    """
+    微观结构算法应用：通过物理 Parquet 数据集计算永久价格冲击
+    """
+    try:
+        df = pd.read_parquet(parquet_path)
+    except Exception as e:
+        return {"error": f"读取失败: {e}"}
         
-        Args:
-            data_dir: Path to the data directory containing Parquet files
-        """
-        self.data_dir = data_dir
-    
-    def generate_report(self, report_date: date = None) -> str:
-        """
-        Generate Markdown report for a given date.
+    if df.empty or len(df) < k_ticks * 2:
+        return {"error": "数据量过少"}
         
-        Args:
-            report_date: Date for the report (default: today)
+    # 计算盘口中点价
+    if 'bid_price' in df.columns and 'ask_price' in df.columns:
+        df['mid_price'] = (df['bid_price'] + df['ask_price']) / 2
+        df['mid_price'] = df['mid_price'].fillna(df['price'])
+    else:
+        df['mid_price'] = df['price']
+
+    # 算法特征工程：shift 提取未来价格窗口
+    df['future_mid'] = df['mid_price'].shift(-k_ticks)
+    
+    # 兼容处理多市场买卖方向标识 (支持富途 BUY/SELL 字符串及数字映射)
+    if df['ticker_direction'].dtype == object:
+        df['sign'] = df['ticker_direction'].map({'BUY': 1, 'SELL': -1, 'NEUTRAL': 0})
+    else:
+        df['sign'] = df['ticker_direction'].map({1: 1, 2: -1, 3: 0})
+    df['sign'] = df['sign'].fillna(0)
+
+    # 测算大单
+    df['perm_impact'] = df['sign'] * (df['future_mid'] - df['mid_price'])
+    large_thresh = df['volume'].quantile(0.90)
+    if large_thresh == 0: large_thresh = 1
+        
+    df_large = df[df['volume'] >= large_thresh].copy()
+    if 'turnover' not in df_large.columns:
+        df_large['turnover'] = df_large['price'] * df_large['volume']
+        
+    large_buys = df_large[df_large['sign'] == 1]
+    large_sells = df_large[df_large['sign'] == -1]
+    
+    net_large_money = large_buys['turnover'].sum() - large_sells['turnover'].sum()
+    buy_impact_score = large_buys['perm_impact'].mean() if not large_buys.empty else 0.0
+    
+    return {
+        "net_money": net_large_money,
+        "buy_impact": buy_impact_score,
+        "threshold": large_thresh
+    }
+
+
+def find_latest_trading_data(archive_base_dir):
+    """自动基于日期由近及远检索最近一个有 parquet 文件的交易日文件夹"""
+    search_date = datetime.today()
+    
+    for _ in range(10): # 最多向前溯源 10 天 (防长假期导致的报告断流)
+        date_str = search_date.strftime('%Y-%m-%d')
+        year_month = search_date.strftime('%Y/%m')
+        
+        # 匹配大数据库下任意市场的多层目录结构
+        search_pattern = os.path.join(archive_base_dir, year_month, "*", f"*_{date_str}.parquet")
+        target_files = glob.glob(search_pattern)
+        
+        if target_files:
+            return date_str, target_files
             
-        Returns:
-            Markdown-formatted report string
-        """
-        if report_date is None:
-            report_date = date.today()
-        
-        # TODO: Read Parquet files and generate report
-        report = f"# Daily Report - {report_date}\n\n"
-        report += "## Analysis\n"
-        
-        return report
+        search_date -= timedelta(days=1)
+    return None, []
+
+
+def execute_analysis_workflow():
+    print("🔮 跨市场微观结构分析模块拉起...")
     
-    def save_report(self, report: str, output_path: str):
-        """
-        Save report to a Markdown file.
+    # 1. 动态载入全系统唯一的相对路径配置
+    settings = load_project_settings(SETTINGS_JSON_PATH)
+    
+    # 2. 将配置中的相对路径，通过动态根目录投影为真实的物理绝对地址
+    archive_dir = os.path.join(PROJECT_ROOT_DIR, settings["storage"]["base_archive_dir"])
+    report_dir = os.path.join(PROJECT_ROOT_DIR, settings["storage"]["base_report_dir"])
+    
+    # 3. 自动嗅探最新有数据的交易日
+    target_date, target_files = find_latest_trading_date(archive_dir)
+    
+    if not target_date:
+        print("😴 数据中心未扫描到任何近期的 Parquet 数据，分析终止。")
+        return
         
-        Args:
-            report: Report content
-            output_path: Path to save the report
-        """
-        with open(output_path, 'w', encoding='utf-8') as f:
-            f.write(report)
+    print(f"📅 锁定测算分析的目标交易日: 【{target_date}】")
+    print(f"📂 正在审计来自数据湖中的 {len(target_files)} 只跨市场标的...")
+
+    # 4. 构建 Markdown 战报文档
+    report_lines = [
+        f"# 🎯 跨市场微观结构筹码审计日报 ({target_date})",
+        f"> 算法重构运行时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "> *监控核心：不看图形虚实，不看红绿假相。只抓主力在微观盘口的真钱沉淀留痕。*\n",
+        "| 资产/个股 | 大单净流入 (真钱) | 买单冲击度(锁仓力) | 动态主力门槛 | 💡 智能诊断预警 |",
+        "| :--- | :--- | :--- | :--- | :--- |"
+    ]
+
+    success_count = 0
+    for file_path in target_files:
+        # 从文件名解析代码，并逆向获取其所属的子市场分类 (US / HK / CN)
+        filename = os.path.basename(file_path)
+        code = filename.split('_')[0]
+        
+        # 执行微观算法特征提取
+        res = run_micro_structure_audit(file_path, k_ticks=15)
+        if "error" in res:
+            continue
+            
+        net_m = res["net_money"]
+        b_imp = res["buy_impact"]
+        thresh = res["threshold"]
+        
+        # 智能阿尔法审计诊断分级
+        if net_m > 0 and b_imp > 0:
+            diag = "🟢 **机构硬核吸筹突破** (买入成色极好)"
+        elif net_m > 0 and b_imp <= 0:
+            diag = "🟡 **虚胖对倒诱多** (筹码松散，警惕假突破)"
+        elif net_m < 0 and b_imp > 0:
+            diag = "🔵 **被动主力截流** (破位阴跌时有大资金冰山单硬抗)"
+        else:
+            diag = "🔴 **知情机构坚决撤离** (极度危险，禁止接飞刀)"
+
+        # 智能金额人类可读格式规范化 (M=百万, K=千)
+        if abs(net_m) >= 1_000_000:
+            money_str = f"${net_m/1_000_000:.2f}M"
+        elif abs(net_m) >= 1_000:
+            money_str = f"${net_m/1_000:.1f}K"
+        else:
+            money_str = f"${net_m:.2f}"
+
+        line = f"| **{code}** | {money_str} | {b_imp:+.4f} | >{int(thresh)} 股 | {diag} |"
+        report_lines.append(line)
+        success_count += 1
+
+    # 5. 自动创建报告存储目录，并直接落盘
+    os.makedirs(report_dir, exist_ok=True)
+    report_file_path = os.path.join(report_dir, f"Audit_Report_{target_date}.md")
+    
+    with open(report_file_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(report_lines))
+
+    print("\n" + "="*50)
+    print(f"🎉 跨市场分析全部圆满完成！成功固化 {success_count} 家资产成色。")
+    print(f"📄 审计日报已存入网盘同步区: {report_file_path}")
+    print("="*50)
+
+
+if __name__ == "__main__":
+    execute_analysis_workflow()
