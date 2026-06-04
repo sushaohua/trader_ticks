@@ -6,7 +6,7 @@ class FutuTickListener(TickerHandlerBase):
         self.queue = data_queue # 注入线程共享安全队列
 
     def on_recv_rsp(self, rsp_pb):
-        ret_code, content = super(FutuTickListener, self).on_receive_form(rsp_pb)
+        ret_code, content = super(FutuTickListener, self).on_recv_rsp(rsp_pb)
         if ret_code != RET_OK:
             return RET_ERROR, content
 

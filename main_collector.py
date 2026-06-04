@@ -1,7 +1,6 @@
 import os
 import json
 import time
-import sys
 import argparse
 import queue
 import threading
@@ -35,7 +34,7 @@ def main():
     # 解析命令行参数确定要执行哪一个市场的收集
     parser = argparse.ArgumentParser(description="工业级多市场跨时区高频Tick收集引擎")
     parser.add_argument("--market", required=True, choices=["US", "HK", "CN"], help="指定目标收集市场")
-    args = parser.parse_argument_args(sys.argv[1:])
+    args = parser.parse_args()
     market = args.market
     
     settings = load_json('./configs/futu_settings.json')
@@ -55,17 +54,6 @@ def main():
     # 建立富途通道
     quote_ctx = OpenQuoteContext(host=settings["futu_opend"]["host"], port=settings["futu_opend"]["port"])
 
-    # 上传数据到GitHub
-    try:
-        import subprocess
-        repo_path = os.path.dirname(os.path.abspath(__file__))
-        os.chdir(repo_path)
-        subprocess.run(["git", "add", "."], check=True)
-        subprocess.run(["git", "commit", "-m", f"Auto-commit: {datetime.now().isoformat()} - {market} tick data"], check=True)
-        subprocess.run(["git", "push"], check=True)
-        print(f"📤 数据已上传至GitHub - {datetime.now()}")
-    except Exception as e:
-        print(f"⚠️ GitHub上传失败: {e}")
     handler = FutuTickListener(data_queue)
     quote_ctx.set_handler(handler)
     quote_ctx.subscribe(stocks, [SubType.TICKER])
