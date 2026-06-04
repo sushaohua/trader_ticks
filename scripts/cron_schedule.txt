@@ -1,0 +1,8 @@
+# Beijing time (UTC+8) cron schedule for trader_ticks
+# Use `crontab -e` or `crontab cron_schedule.txt` to install.
+
+CRON_TZ=Asia/Shanghai
+30 21 * * * /home/sushaohua/aaa/trader_ticks/scripts/run_us_market.sh
+0 4 * * * /home/sushaohua/aaa/trader_ticks/scripts/stop_us_market.sh
+30 9 * * * /home/sushaohua/aaa/trader_ticks/scripts/run_hk_market.sh
+0 16 * * * /home/sushaohua/aaa/trader_ticks/scripts/stop_hk_market.sh
