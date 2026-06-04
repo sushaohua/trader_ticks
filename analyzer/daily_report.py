@@ -106,7 +106,7 @@ def execute_analysis_workflow():
     report_dir = os.path.join(PROJECT_ROOT_DIR, settings["storage"]["base_report_dir"])
     
     # 3. 自动嗅探最新有数据的交易日
-    target_date, target_files = find_latest_trading_date(archive_dir)
+    target_date, target_files = find_latest_trading_data(archive_dir)
     
     if not target_date:
         print("😴 数据中心未扫描到任何近期的 Parquet 数据，分析终止。")
