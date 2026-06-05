@@ -1,6 +1,7 @@
 import os
 import json
 import glob
+import gc
 import pandas as pd
 from datetime import datetime, timedelta
 
@@ -36,44 +37,55 @@ def run_micro_structure_audit(parquet_path, k_ticks=15):
         
     if df.empty or len(df) < k_ticks * 2:
         return {"error": "数据量过少"}
-        
-    # 计算盘口中点价
-    if 'bid_price' in df.columns and 'ask_price' in df.columns:
-        df['mid_price'] = (df['bid_price'] + df['ask_price']) / 2
-        df['mid_price'] = df['mid_price'].fillna(df['price'])
-    else:
-        df['mid_price'] = df['price']
+    
+    try:
+        # 计算盘口中点价
+        if 'bid_price' in df.columns and 'ask_price' in df.columns:
+            df['mid_price'] = (df['bid_price'] + df['ask_price']) / 2
+            df['mid_price'] = df['mid_price'].fillna(df['price'])
+        else:
+            df['mid_price'] = df['price']
 
-    # 算法特征工程：shift 提取未来价格窗口
-    df['future_mid'] = df['mid_price'].shift(-k_ticks)
-    
-    # 兼容处理多市场买卖方向标识 (支持富途 BUY/SELL 字符串及数字映射)
-    if df['ticker_direction'].dtype == object:
-        df['sign'] = df['ticker_direction'].map({'BUY': 1, 'SELL': -1, 'NEUTRAL': 0})
-    else:
-        df['sign'] = df['ticker_direction'].map({1: 1, 2: -1, 3: 0})
-    df['sign'] = df['sign'].fillna(0)
+        # 算法特征工程：shift 提取未来价格窗口
+        df['future_mid'] = df['mid_price'].shift(-k_ticks)
+        
+        # 兼容处理多市场买卖方向标识 (支持富途 BUY/SELL 字符串及数字映射)
+        if df['ticker_direction'].dtype == object:
+            df['sign'] = df['ticker_direction'].map({'BUY': 1, 'SELL': -1, 'NEUTRAL': 0})
+        else:
+            df['sign'] = df['ticker_direction'].map({1: 1, 2: -1, 3: 0})
+        df['sign'] = df['sign'].fillna(0)
 
-    # 测算大单
-    df['perm_impact'] = df['sign'] * (df['future_mid'] - df['mid_price'])
-    large_thresh = df['volume'].quantile(0.90)
-    if large_thresh == 0: large_thresh = 1
+        # 测算大单
+        df['perm_impact'] = df['sign'] * (df['future_mid'] - df['mid_price'])
+        large_thresh = df['volume'].quantile(0.90)
+        if large_thresh == 0: large_thresh = 1
+            
+        df_large = df[df['volume'] >= large_thresh].copy()
+        if 'turnover' not in df_large.columns:
+            df_large['turnover'] = df_large['price'] * df_large['volume']
+            
+        large_buys = df_large[df_large['sign'] == 1]
+        large_sells = df_large[df_large['sign'] == -1]
         
-    df_large = df[df['volume'] >= large_thresh].copy()
-    if 'turnover' not in df_large.columns:
-        df_large['turnover'] = df_large['price'] * df_large['volume']
+        net_large_money = large_buys['turnover'].sum() - large_sells['turnover'].sum()
+        buy_impact_score = large_buys['perm_impact'].mean() if not large_buys.empty else 0.0
         
-    large_buys = df_large[df_large['sign'] == 1]
-    large_sells = df_large[df_large['sign'] == -1]
-    
-    net_large_money = large_buys['turnover'].sum() - large_sells['turnover'].sum()
-    buy_impact_score = large_buys['perm_impact'].mean() if not large_buys.empty else 0.0
-    
-    return {
-        "net_money": net_large_money,
-        "buy_impact": buy_impact_score,
-        "threshold": large_thresh
-    }
+        return {
+            "net_money": net_large_money,
+            "buy_impact": buy_impact_score,
+            "threshold": large_thresh
+        }
+    finally:
+        # 🔥 修复：显式删除所有中间 DataFrame，防止内存泄漏
+        del df
+        try:
+            del df_large
+            del large_buys
+            del large_sells
+        except (NameError, UnboundLocalError):
+            pass  # 如果出错，这些变量可能未创建
+        gc.collect()
 
 
 def find_latest_trading_data(archive_base_dir):
@@ -125,6 +137,8 @@ def execute_analysis_workflow():
     ]
 
     success_count = 0
+    gc_interval = 0  # 🔥 添加垃圾回收计数器
+    
     for file_path in target_files:
         # 从文件名解析代码，并逆向获取其所属的子市场分类 (US / HK / CN)
         filename = os.path.basename(file_path)
@@ -160,6 +174,11 @@ def execute_analysis_workflow():
         line = f"| **{code}** | {money_str} | {b_imp:+.4f} | >{int(thresh)} 股 | {diag} |"
         report_lines.append(line)
         success_count += 1
+        
+        # 🔥 修复：每处理100个文件触发一次垃圾回收，防止内存积累
+        gc_interval += 1
+        if gc_interval % 100 == 0:
+            gc.collect()
 
     # 5. 自动创建报告存储目录，并直接落盘
     os.makedirs(report_dir, exist_ok=True)

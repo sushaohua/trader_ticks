@@ -1,4 +1,5 @@
 import os
+import gc
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -59,12 +60,27 @@ class ParquetStorageEngine:
         if code not in self.buffers or not self.buffers[code]:
             return
             
-        df = pd.DataFrame(self.buffers[code])
-        # 移除显式索引字段，转为 Table 格式时强制应用统一 Schema
-        table = pa.Table.from_pandas(df, schema=self.schema, preserve_index=False)
-        self.writers[code].write_table(table)
-        
-        self.buffers[code].clear() # 瞬间清空内存，防止常驻内存泄漏
+        try:
+            df = pd.DataFrame(self.buffers[code])
+            # 移除显式索引字段，转为 Table 格式时强制应用统一 Schema
+            table = pa.Table.from_pandas(df, schema=self.schema, preserve_index=False)
+            self.writers[code].write_table(table)
+            
+            self.buffers[code].clear() # 瞬间清空内存，防止常驻内存泄漏
+            
+            # 🔥 关键修复：显式释放大对象，防止子进程继承
+            del df
+            del table
+            gc.collect()  # 强制垃圾回收，及时释放内存
+        except Exception as e:
+            print(f"⚠️ flush_to_disk({code}) 异常: {e}")
+            self.buffers[code].clear()
+    
+    def flush_all_stocks(self):
+        """批量刷盘所有股票的缓冲数据 - 用于空闲时主动清理"""
+        for code in list(self.buffers.keys()):
+            if self.buffers[code]:  # 只刷非空的缓冲
+                self.flush_to_disk(code)
 
     def close_all(self):
         """收盘后，强制将所有剩余尾巴数据刷入磁盘并安全封口指针"""
@@ -73,4 +89,11 @@ class ParquetStorageEngine:
             self.flush_to_disk(code)
             if code in self.writers:
                 self.writers[code].close()
+                # 🔥 显式删除 writer 对象释放引用
+                del self.writers[code]
+        
+        # 清空所有引用并进行强制垃圾回收
+        self.buffers.clear()
+        self.writers.clear()
+        gc.collect()  # 最后一次彻底垃圾回收
         print("🔒 今日所有 Parquet 数据库已安全断开并封口。")
