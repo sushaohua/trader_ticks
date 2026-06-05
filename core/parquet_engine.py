@@ -10,6 +10,7 @@ class ParquetStorageEngine:
         self.market = market_type.upper()
         self.base_dir = config["storage"]["base_archive_dir"]
         self.flush_threshold = config["storage"]["flush_threshold"]
+        self.flush_interval_seconds = config["storage"].get("flush_interval_seconds", 5)
         self.compression = config["storage"]["compression"]
         
         # 严格定义 Tick 数据的表结构 (Schema)，确保跨市场数据格式绝对对齐
@@ -27,6 +28,7 @@ class ParquetStorageEngine:
         self.buffers = {}
         self.writers = {}
         self.today_str = datetime.today().strftime('%Y-%m-%d')
+        self.last_flush_time = {}
         # 多级目录规划：archive/年/月/市场/股票_日期.parquet
         self.market_dir = os.path.join(self.base_dir, datetime.today().strftime('%Y/%m'), self.market)
         os.makedirs(self.market_dir, exist_ok=True)
@@ -45,9 +47,12 @@ class ParquetStorageEngine:
             
         self.buffers[code].append(tick_dict)
         
-        # 达到积压阈值，瞬间执行二进制 Row Group 压盘入库
-        if len(self.buffers[code]) >= self.flush_threshold:
+        now = datetime.now().timestamp()
+        last_flush = self.last_flush_time.get(code, 0)
+        should_flush = len(self.buffers[code]) >= self.flush_threshold or (self.flush_interval_seconds > 0 and now - last_flush >= self.flush_interval_seconds)
+        if should_flush:
             self.flush_to_disk(code)
+            self.last_flush_time[code] = now
 
     def flush_to_disk(self, code):
         """将特定股票的内存 Buffer 批量转化为二进制块压入磁盘"""
