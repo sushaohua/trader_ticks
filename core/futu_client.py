@@ -1,9 +1,11 @@
 from futu import *
+import gc
 
 class FutuTickListener(TickerHandlerBase):
     def __init__(self, data_queue):
         super(FutuTickListener, self).__init__()
         self.queue = data_queue # 注入线程共享安全队列
+        self.tick_count = 0
 
     def on_recv_rsp(self, rsp_pb):
         ret_code, content = super(FutuTickListener, self).on_recv_rsp(rsp_pb)
@@ -22,4 +24,10 @@ class FutuTickListener(TickerHandlerBase):
                 "ask_price": float(row['ask_price']) if 'ask_price' in row else 0.0
             }
             self.queue.put(tick_packet)
+        
+        # 🔥 定期垃圾回收（每10000条消息触发一次）
+        self.tick_count += len(content)
+        if self.tick_count % 10000 == 0:
+            gc.collect()
+        
         return RET_OK, content
