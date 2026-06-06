@@ -35,7 +35,7 @@ def main():
     # 解析命令行参数确定要执行哪一个市场的收集
     parser = argparse.ArgumentParser(description="工业级多市场跨时区高频Tick收集引擎")
     parser.add_argument("--market", required=True, choices=["US", "HK", "CN"], help="指定目标收集市场")
-    args = parser.parse_argument_args(sys.argv[1:])
+    args = parser.parse_args()
     market = args.market
     
     settings = load_json('./configs/futu_settings.json')
