@@ -1,5 +1,9 @@
 from futu import *
 import gc
+import queue
+import logging
+
+logger = logging.getLogger(__name__)
 
 class FutuTickListener(TickerHandlerBase):
     def __init__(self, data_queue):
@@ -23,7 +27,11 @@ class FutuTickListener(TickerHandlerBase):
                 "bid_price": float(row['bid_price']) if 'bid_price' in row else 0.0,
                 "ask_price": float(row['ask_price']) if 'ask_price' in row else 0.0
             }
-            self.queue.put(tick_packet)
+            try:
+                # 🔥 防止无限阻塞导致富途线程卡死，增加 timeout 和 Full 异常处理
+                self.queue.put(tick_packet, block=True, timeout=2.0)
+            except queue.Full:
+                logger.error(f"🚨 队列已满(100k)，消费者卡死或落后，丢弃数据: {row['code']}")
         
         # 🔥 定期垃圾回收（每10000条消息触发一次）
         self.tick_count += len(content)

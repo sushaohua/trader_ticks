@@ -3,6 +3,7 @@ import json
 import glob
 import gc
 import pandas as pd
+import logging
 from datetime import datetime, timedelta
 
 # =====================================================================
@@ -17,6 +18,22 @@ PROJECT_ROOT_DIR = os.path.dirname(CURRENT_SCRIPT_DIR)
 # 3. 动态拼接并锁定唯一的全局设置 json 相对路径
 SETTINGS_JSON_PATH = os.path.join(PROJECT_ROOT_DIR, "configs", "futu_settings.json")
 
+# =====================================================================
+# 配置日志系统 (提高日志完整性)
+# =====================================================================
+LOG_DIR = os.path.join(PROJECT_ROOT_DIR, 'data', 'logs')
+os.makedirs(LOG_DIR, exist_ok=True)
+log_file_path = os.path.join(LOG_DIR, 'daily_report.log')
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(levelname)s | %(message)s',
+    handlers=[
+        logging.FileHandler(log_file_path),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 def load_project_settings(config_path):
     """安全解析全局配置文件"""
@@ -31,9 +48,20 @@ def run_micro_structure_audit(parquet_path, k_ticks=15):
     微观结构算法应用：通过物理 Parquet 数据集计算永久价格冲击
     """
     try:
-        df = pd.read_parquet(parquet_path)
+        # 🔥 核心修复：限制只读取需要的列，极大降低内存载入压力
+        use_cols = ['price', 'volume', 'ticker_direction', 'bid_price', 'ask_price', 'turnover']
+        
+        # 兼容性处理：如果不确定全表有哪些列，可先读schema
+        # 这里为了稳妥，使用try-except处理可能不存在的列(例如老的测试文件可能没有bid_price)
+        df = pd.read_parquet(parquet_path, columns=use_cols)
     except Exception as e:
-        return {"error": f"读取失败: {e}"}
+        # 退回全量读取尝试(兼容处理)
+        try:
+            df = pd.read_parquet(parquet_path)
+            # 过滤只保留需要的列
+            df = df[[col for col in use_cols if col in df.columns]]
+        except Exception as e2:
+            return {"error": f"读取失败: {e2}"}
         
     if df.empty or len(df) < k_ticks * 2:
         return {"error": "数据量过少"}
@@ -62,6 +90,11 @@ def run_micro_structure_audit(parquet_path, k_ticks=15):
         if large_thresh == 0: large_thresh = 1
             
         df_large = df[df['volume'] >= large_thresh].copy()
+        
+        # 🔥 立即释放原表大部分内容以节约内存
+        del df
+        gc.collect()
+
         if 'turnover' not in df_large.columns:
             df_large['turnover'] = df_large['price'] * df_large['volume']
             
@@ -78,7 +111,10 @@ def run_micro_structure_audit(parquet_path, k_ticks=15):
         }
     finally:
         # 🔥 修复：显式删除所有中间 DataFrame，防止内存泄漏
-        del df
+        try:
+            del df
+        except (NameError, UnboundLocalError):
+            pass
         try:
             del df_large
             del large_buys
@@ -108,7 +144,7 @@ def find_latest_trading_data(archive_base_dir):
 
 
 def execute_analysis_workflow():
-    print("🔮 跨市场微观结构分析模块拉起...")
+    logger.info("🔮 跨市场微观结构分析模块拉起...")
     
     # 1. 动态载入全系统唯一的相对路径配置
     settings = load_project_settings(SETTINGS_JSON_PATH)
@@ -121,11 +157,11 @@ def execute_analysis_workflow():
     target_date, target_files = find_latest_trading_data(archive_dir)
     
     if not target_date:
-        print("😴 数据中心未扫描到任何近期的 Parquet 数据，分析终止。")
+        logger.warning("😴 数据中心未扫描到任何近期的 Parquet 数据，分析终止。")
         return
         
-    print(f"📅 锁定测算分析的目标交易日: 【{target_date}】")
-    print(f"📂 正在审计来自数据湖中的 {len(target_files)} 只跨市场标的...")
+    logger.info(f"📅 锁定测算分析的目标交易日: 【{target_date}】")
+    logger.info(f"📂 正在审计来自数据湖中的 {len(target_files)} 只跨市场标的...")
 
     # 4. 构建 Markdown 战报文档
     report_lines = [
@@ -147,6 +183,7 @@ def execute_analysis_workflow():
         # 执行微观算法特征提取
         res = run_micro_structure_audit(file_path, k_ticks=15)
         if "error" in res:
+            logger.debug(f"跳过 {code}: {res['error']}")
             continue
             
         net_m = res["net_money"]
@@ -187,10 +224,10 @@ def execute_analysis_workflow():
     with open(report_file_path, "w", encoding="utf-8") as f:
         f.write("\n".join(report_lines))
 
-    print("\n" + "="*50)
-    print(f"🎉 跨市场分析全部圆满完成！成功固化 {success_count} 家资产成色。")
-    print(f"📄 审计日报已存入网盘同步区: {report_file_path}")
-    print("="*50)
+    logger.info("="*50)
+    logger.info(f"🎉 跨市场分析全部圆满完成！成功固化 {success_count} 家资产成色。")
+    logger.info(f"📄 审计日报已存入网盘同步区: {report_file_path}")
+    logger.info("="*50)
 
 
 if __name__ == "__main__":

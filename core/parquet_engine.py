@@ -3,7 +3,10 @@ import gc
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+import logging
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 class ParquetStorageEngine:
     def __init__(self, config, market_type):
@@ -73,7 +76,7 @@ class ParquetStorageEngine:
             del table
             gc.collect()  # 强制垃圾回收，及时释放内存
         except Exception as e:
-            print(f"⚠️ flush_to_disk({code}) 异常: {e}")
+            logger.error(f"⚠️ flush_to_disk({code}) 异常: {e}", exc_info=True)
             self.buffers[code].clear()
     
     def flush_all_stocks(self):
@@ -84,7 +87,7 @@ class ParquetStorageEngine:
 
     def close_all(self):
         """收盘后，强制将所有剩余尾巴数据刷入磁盘并安全封口指针"""
-        print("⚙️ 收到收盘信号，正在将内存残余 Tick 强制固化...")
+        logger.info("⚙️ 收到收盘信号，正在将内存残余 Tick 强制固化...")
         for code in list(self.buffers.keys()):
             self.flush_to_disk(code)
             if code in self.writers:
@@ -96,4 +99,4 @@ class ParquetStorageEngine:
         self.buffers.clear()
         self.writers.clear()
         gc.collect()  # 最后一次彻底垃圾回收
-        print("🔒 今日所有 Parquet 数据库已安全断开并封口。")
+        logger.info("🔒 今日所有 Parquet 数据库已安全断开并封口。")
