@@ -6,8 +6,8 @@
     "storage": {
         "base_archive_dir": "./data/archive",
         "base_report_dir": "./data/reports",
-        "flush_threshold": 2000,
-        "flush_interval_seconds": 10,
+        "flush_threshold": 50000,
+        "flush_interval_seconds": 300,
         "compression": "snappy"
     }
 }
