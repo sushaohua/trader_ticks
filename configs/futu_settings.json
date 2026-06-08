@@ -6,7 +6,7 @@
     "storage": {
         "base_archive_dir": "./data/archive",
         "base_report_dir": "./data/reports",
-        "flush_threshold": 50000,
+        "flush_threshold": 200,
         "flush_interval_seconds": 10,
         "compression": "snappy"
     }
