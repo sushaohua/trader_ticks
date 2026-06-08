@@ -45,3 +45,6 @@ data/archive/**/*.parquet
 # OS
 .DS_Store
 Thumbs.db
+
+# Local configuration overrides
+configs/futu_settings.local.json

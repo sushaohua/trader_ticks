@@ -11,6 +11,7 @@ from futu import *
 
 from core.futu_client import FutuTickListener
 from core.parquet_engine import ParquetStorageEngine
+from core.config import load_config
 
 # =====================================================================
 # 配置日志系统 (提高日志完整性)
@@ -72,7 +73,7 @@ def main():
     args = parser.parse_args()
     market = args.market
     
-    settings = load_json('./configs/futu_settings.json')
+    settings = load_config()
     watchlist = load_json(f'./configs/watchlist_{market.lower()}.json')
     stocks = watchlist["stocks"]
     

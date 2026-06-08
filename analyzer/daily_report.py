@@ -15,8 +15,11 @@ CURRENT_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # 2. 自动逆向推导出项目的根目录绝对物理地址 (即 analyzer/ 的上一级)
 PROJECT_ROOT_DIR = os.path.dirname(CURRENT_SCRIPT_DIR)
 
-# 3. 动态拼接并锁定唯一的全局设置 json 相对路径
-SETTINGS_JSON_PATH = os.path.join(PROJECT_ROOT_DIR, "configs", "futu_settings.json")
+import sys
+if PROJECT_ROOT_DIR not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT_DIR)
+
+from core.config import load_config
 
 # =====================================================================
 # 配置日志系统 (提高日志完整性)
@@ -34,13 +37,6 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
-
-def load_project_settings(config_path):
-    """安全解析全局配置文件"""
-    if not os.path.exists(config_path):
-        raise FileNotFoundError(f"🚨 核心配置文件未找到: {config_path}")
-    with open(config_path, 'r', encoding='utf-8') as f:
-        return json.load(f)
 
 
 def run_micro_structure_audit(parquet_path, k_ticks=15):
@@ -146,12 +142,12 @@ def find_latest_trading_data(archive_base_dir):
 def execute_analysis_workflow():
     logger.info("🔮 跨市场微观结构分析模块拉起...")
     
-    # 1. 动态载入全系统唯一的相对路径配置
-    settings = load_project_settings(SETTINGS_JSON_PATH)
+    # 1. 动态载入配置
+    settings = load_config()
     
-    # 2. 将配置中的相对路径，通过动态根目录投影为真实的物理绝对地址
-    archive_dir = os.path.join(PROJECT_ROOT_DIR, settings["storage"]["base_archive_dir"])
-    report_dir = os.path.join(PROJECT_ROOT_DIR, settings["storage"]["base_report_dir"])
+    # 2. 将配置中的路径（支持相对/绝对路径）标准化为物理绝对地址
+    archive_dir = os.path.abspath(os.path.join(PROJECT_ROOT_DIR, settings["storage"]["base_archive_dir"]))
+    report_dir = os.path.abspath(os.path.join(PROJECT_ROOT_DIR, settings["storage"]["base_report_dir"]))
     
     # 3. 自动嗅探最新有数据的交易日
     target_date, target_files = find_latest_trading_data(archive_dir)
