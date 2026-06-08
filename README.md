@@ -46,59 +46,92 @@
 
 - Python 3.8+
 - [Futu OpenD](https://www.futunn.com/) running and accessible (default: `127.0.0.1:11111`)
-- Additional Python dependencies (if any) listed in a future `requirements.txt`
+- Python libraries: `futu-api`, `pandas`, `pyarrow`
 
 ---
 
 ## Quick Start
 
-### 1. Clone & configure
+### 1. Clone & Setup Environment
 
 ```bash
 git clone <repository-url>
-cd trader-ticks-collector
+cd trader-ticks
+python3 -m venv venv
+venv/bin/pip install --upgrade pip
+venv/bin/pip install futu-api pandas pyarrow
 ```
 
-Edit the configuration files in `configs/` as needed:
+### 2. Configure Settings
 
-- **`futu_settings.json`** — Set the Futu OpenD host, port, and password
-- **`watchlist_us.json` / `watchlist_hk.json` / `watchlist_cn.json`** — Add stock codes to your watchlist
+Edit configuration files in `configs/`:
 
-### 2. Run data collection
+*   **`futu_settings.json`** — Contains default settings for Futu OpenD connection and relative storage paths.
+*   **`futu_settings.local.json`** — (**Recommended for production**) Create this file to override settings locally. It is untracked by Git, so you can specify custom absolute storage directories (e.g., `/home/sushaohua/trader_ticks_data/archive`) and host details without affecting Git updates.
+*   **`FUTU_SETTINGS_PATH`** — Alternatively, export this environment variable to load configurations from any arbitrary file path.
+
+Example `futu_settings.local.json`:
+```json
+{
+    "futu_opend": {
+        "host": "127.0.0.1",
+        "port": 11111
+    },
+    "storage": {
+        "base_archive_dir": "/var/data/trader_ticks/archive",
+        "base_report_dir": "/var/data/trader_ticks/reports",
+        "flush_threshold": 200,
+        "flush_interval_seconds": 10,
+        "compression": "snappy"
+    }
+}
+```
+
+### 3. Run data collection
+
+Using the virtual environment:
 
 ```bash
 # US market
-python main_collector.py --market US
+venv/bin/python main_collector.py --market US
 
 # HK market
-python main_collector.py --market HK
+venv/bin/python main_collector.py --market HK
 
-# CN market
-python main_collector.py --market CN
+# CN market (A-share)
+venv/bin/python main_collector.py --market CN
 ```
 
-Or use the provided shell scripts:
+Or run the provided background shell scripts:
 
 ```bash
 bash scripts/run_us_market.sh
 bash scripts/run_hk_market.sh
 ```
 
-### 3. Generate reports (coming soon)
+To stop collectors running in the background gracefully (waiting up to 20 seconds for data to flush and close parquet files safely):
 
-```python
-from analyzer.daily_report import DailyReportGenerator
+```bash
+bash scripts/stop_us_market.sh
+bash scripts/stop_hk_market.sh
+```
 
-generator = DailyReportGenerator("data/archive")
-report = generator.generate_report()
-print(report)
+### 4. Generate reports
+
+Run the offline reporting generator:
+
+```bash
+venv/bin/python -m analyzer.daily_report
 ```
 
 ---
 
 ## Project Status
 
-This project is in early development. Core module interfaces are defined, but inner implementations are marked as `TODO`. Contributions and suggestions are welcome.
+This project is in active development. Core modules and architecture are set up, and basic tests can be run via:
+```bash
+venv/bin/python -m unittest tests/test_smoke.py
+```
 
 ---
 
