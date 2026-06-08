@@ -13,9 +13,17 @@ if [ -f "$PID_FILE" ]; then
   if kill -0 "$PID" 2>/dev/null; then
     echo "Stopping US market data collection (PID $PID)..."
     kill "$PID"
-    sleep 2
+    
+    # Wait up to 20 seconds for the process to exit gracefully
+    for i in {1..20}; do
+      if ! kill -0 "$PID" 2>/dev/null; then
+        break
+      fi
+      sleep 1
+    done
+    
     if kill -0 "$PID" 2>/dev/null; then
-      echo "Process still running, forcing kill..."
+      echo "Process still running after 20 seconds, forcing kill..."
       kill -9 "$PID"
     fi
     rm -f "$PID_FILE"
