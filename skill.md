@@ -29,10 +29,10 @@
         "port": 11111
     },
     "clickhouse": {
-        "host": "103.118.254.69",
+        "host": "YOUR_CLICKHOUSE_HOST",
         "port": 8123,
-        "username": "sushaohua",
-        "password": "YOUR_PASSWORD",
+        "username": "YOUR_CLICKHOUSE_USER",
+        "password": "YOUR_CLICKHOUSE_PASSWORD",
         "database": "stock_preview"
     },
     "storage": {
