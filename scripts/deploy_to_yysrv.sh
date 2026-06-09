@@ -87,13 +87,17 @@ python3 -c "
 from futu import *
 try:
     q = OpenQuoteContext(host='127.0.0.1', port=11111)
-    state = q.get_global_state()
+    ret, state = q.get_global_state()
     q.close()
-    if state[1].get('conn_status') == '1' and state[1].get('login_status') == '1':
-        print('      ✅ OpenD 状态检查通过: 连接已就绪，已成功登录富途服务器。')
-        print(f'      详细状态: {state[1]}')
+    if ret == 0:
+        is_logined = state.get('login_status') == '1' or state.get('qot_logined') is True
+        if is_logined:
+            print('      ✅ OpenD 状态检查通过: 连接已就绪，已成功登录富途服务器。')
+            print(f'      详细状态: {state}')
+        else:
+            print('      ❌ OpenD 状态检查异常 (未登录): ', state)
     else:
-        print('      ❌ OpenD 状态检查异常: ', state[1])
+        print('      ❌ OpenD 状态检查异常 (获取状态失败): ', ret, state)
 except Exception as e:
     print('      ❌ 无法连接 OpenD: ', e)
 "
