@@ -364,7 +364,7 @@ class ClickHouseStorageEngine:
         """后台重连与双表灾备数据恢复线程"""
         retry_interval = 5
         while not self.stop_event.is_set():
-            # 1. 检查并重连数据库
+            # 1. 检查并重连主数据库连接
             if not self.db_connected or not self.client:
                 self.connect_db()
                 if not self.db_connected:
@@ -374,60 +374,76 @@ class ClickHouseStorageEngine:
                 else:
                     retry_interval = 5
             
-            # 2. 如果重连成功，扫描灾备 Parquet 并尝试恢复
+            # 2. 如果主连接正常，独立实例化一个 recovery_client 用于回放积压的本地 failover 文件
+            recovery_client = None
             try:
-                # 2.1 恢复 Ticks
                 tick_files = sorted([f for f in os.listdir(self.failover_dir) if f.startswith("failover_") and not f.startswith("failover_ob_") and f.endswith(".parquet")])
-                if tick_files:
-                    logger.info(f"⏳ 发现 {len(tick_files)} 个 Ticks 故障灾备数据块，启动异步补录...")
-                    for fname in tick_files:
-                        if self.stop_event.is_set():
-                            break
-                        file_path = os.path.join(self.failover_dir, fname)
-                        try:
-                            df = pd.read_parquet(file_path)
-                            def re_localize_tick(row):
-                                code = row['code']
-                                dt_utc = pytz.utc.localize(row['time'])
-                                if '.US' in code or code.startswith('US.'):
-                                    return dt_utc.astimezone(self.tz_us)
-                                else:
-                                    return dt_utc.astimezone(self.tz_hk)
-                            df['time'] = df.apply(re_localize_tick, axis=1)
-                            self.client.insert_df(self.full_table_path, df)
-                            logger.info(f"⚡ 成功补录 Ticks 数据块 {fname} ({len(df)} 条) 到 ClickHouse")
-                            os.remove(file_path)
-                            del df
-                            gc.collect()
-                        except Exception as block_ex:
-                            logger.error(f"❌ 补录 Ticks 数据块 {fname} 失败: {block_ex}. 稍后重试。")
-                            break
-                
-                # 2.2 恢复 OrderBooks
                 ob_files = sorted([f for f in os.listdir(self.failover_dir) if f.startswith("failover_ob_") and f.endswith(".parquet")])
-                if ob_files:
-                    logger.info(f"⏳ 发现 {len(ob_files)} 个 OrderBooks 故障灾备数据块，启动异步补录...")
-                    for fname in ob_files:
-                        if self.stop_event.is_set():
-                            break
-                        file_path = os.path.join(self.failover_dir, fname)
-                        try:
-                            df = pd.read_parquet(file_path)
-                            def re_localize_ob(row):
-                                dt_utc = pytz.utc.localize(row['time'])
-                                return dt_utc.astimezone(self.tz_hk)
-                            df['time'] = df.apply(re_localize_ob, axis=1)
-                            self.client.insert_df(self.ob_full_table_path, df)
-                            logger.info(f"⚡ 成功补录 OrderBooks 数据块 {fname} ({len(df)} 条) 到 ClickHouse")
-                            os.remove(file_path)
-                            del df
-                            gc.collect()
-                        except Exception as block_ex:
-                            logger.error(f"❌ 补录 OrderBooks 数据块 {fname} 失败: {block_ex}. 稍后重试。")
-                            break
-                            
+                
+                if tick_files or ob_files:
+                    recovery_client = clickhouse_connect.get_client(
+                        host=self.host,
+                        port=self.port,
+                        username=self.username,
+                        password=self.password
+                    )
+                    
+                    # 2.1 恢复 Ticks
+                    if tick_files:
+                        logger.info(f"⏳ 发现 {len(tick_files)} 个 Ticks 故障灾备数据块，启动异步补录...")
+                        for fname in tick_files:
+                            if self.stop_event.is_set():
+                                break
+                            file_path = os.path.join(self.failover_dir, fname)
+                            try:
+                                df = pd.read_parquet(file_path)
+                                def re_localize_tick(row):
+                                    code = row['code']
+                                    dt_utc = pytz.utc.localize(row['time'])
+                                    if '.US' in code or code.startswith('US.'):
+                                        return dt_utc.astimezone(self.tz_us)
+                                    else:
+                                        return dt_utc.astimezone(self.tz_hk)
+                                df['time'] = df.apply(re_localize_tick, axis=1)
+                                recovery_client.insert_df(self.full_table_path, df)
+                                logger.info(f"⚡ 成功补录 Ticks 数据块 {fname} ({len(df)} 条) 到 ClickHouse")
+                                os.remove(file_path)
+                                del df
+                                gc.collect()
+                            except Exception as block_ex:
+                                logger.error(f"❌ 补录 Ticks 数据块 {fname} 失败: {block_ex}. 稍后重试。")
+                                break
+                    
+                    # 2.2 恢复 OrderBooks
+                    if ob_files:
+                        logger.info(f"⏳ 发现 {len(ob_files)} 个 OrderBooks 故障灾备数据块，启动异步补录...")
+                        for fname in ob_files:
+                            if self.stop_event.is_set():
+                                break
+                            file_path = os.path.join(self.failover_dir, fname)
+                            try:
+                                df = pd.read_parquet(file_path)
+                                def re_localize_ob(row):
+                                    dt_utc = pytz.utc.localize(row['time'])
+                                    return dt_utc.astimezone(self.tz_hk)
+                                df['time'] = df.apply(re_localize_ob, axis=1)
+                                recovery_client.insert_df(self.ob_full_table_path, df)
+                                logger.info(f"⚡ 成功补录 OrderBooks 数据块 {fname} ({len(df)} 条) 到 ClickHouse")
+                                os.remove(file_path)
+                                del df
+                                gc.collect()
+                            except Exception as block_ex:
+                                logger.error(f"❌ 补录 OrderBooks 数据块 {fname} 失败: {block_ex}. 稍后重试。")
+                                break
+                                
             except Exception as loop_ex:
                 logger.error(f"⚠️ 补录守护进程发生未知异常: {loop_ex}")
+            finally:
+                if recovery_client:
+                    try:
+                        recovery_client.close()
+                    except Exception:
+                        pass
                 
             time.sleep(5)
 
