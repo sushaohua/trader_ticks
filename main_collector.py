@@ -50,7 +50,11 @@ def consumer_storage_worker(engine):
             # 阻塞1秒等待数据，防止CPU死循环空空耗
             tick = data_queue.get(timeout=1)
             empty_count = 0  # 重置空计数
-            engine.append_tick(tick['code'], tick)
+            _type = tick.get("_type", "ticker")
+            if _type == "order_book":
+                engine.append_order_book(tick['code'], tick)
+            else:
+                engine.append_tick(tick['code'], tick)
             data_queue.task_done()
             
             # 🔥 周期性垃圾回收（每处理10000条数据触发一次）
@@ -103,15 +107,37 @@ def main():
     storage_thread.start()
     
     quote_ctx = None
-    handler = None
+    handlers = []
     
     # 设定平稳退出机制
     try:
         # 建立富途通道
         quote_ctx = OpenQuoteContext(host=settings["futu_opend"]["host"], port=settings["futu_opend"]["port"])
 
-        handler = FutuTickListener(data_queue)
-        quote_ctx.set_handler(handler)
+        # 动态加载订阅类型
+        sub_types_cfg = settings.get("storage", {}).get("sub_types", ["TICKER"])
+        sub_types = []
+        
+        if "TICKER" in sub_types_cfg:
+            sub_types.append(SubType.TICKER)
+            tick_handler = FutuTickListener(data_queue)
+            quote_ctx.set_handler(tick_handler)
+            handlers.append(tick_handler)
+            logger.info("📡 注册 Ticker (成交数据) 订阅处理器")
+            
+        if "ORDER_BOOK" in sub_types_cfg:
+            sub_types.append(SubType.ORDER_BOOK)
+            from core.futu_client import FutuOrderBookListener
+            ob_handler = FutuOrderBookListener(data_queue)
+            quote_ctx.set_handler(ob_handler)
+            handlers.append(ob_handler)
+            logger.info("📡 注册 OrderBook (买卖盘口) 订阅处理器")
+            
+        if not sub_types:
+            sub_types.append(SubType.TICKER)
+            tick_handler = FutuTickListener(data_queue)
+            quote_ctx.set_handler(tick_handler)
+            handlers.append(tick_handler)
         
         # 🔥 添加连接重试限制，防止无限重试导致内存爆炸
         max_retries = 100  # 最多重试100次
@@ -120,8 +146,8 @@ def main():
         
         while retry_count < max_retries:
             try:
-                quote_ctx.subscribe(stocks, [SubType.TICKER])
-                logger.info(f"✅ 成功订阅 {len(stocks)} 只股票")
+                quote_ctx.subscribe(stocks, sub_types)
+                logger.info(f"✅ 成功订阅 {len(stocks)} 只股票 | 订阅类型: {sub_types_cfg}")
                 subscribe_success = True
                 break
             except Exception as e:
@@ -154,13 +180,15 @@ def main():
                 status["db_connected"] = getattr(storage_engine, "db_connected", False)
                 with getattr(storage_engine, "lock", threading.Lock()):
                     status["buffer_size"] = len(getattr(storage_engine, "buffer", []))
+                    status["ob_buffer_size"] = len(getattr(storage_engine, "ob_buffer", []))
                 status["failover_files_count"] = len([
                     f for f in os.listdir(getattr(storage_engine, "failover_dir", ""))
-                    if f.startswith("failover_") and f.endswith(".parquet")
+                    if (f.startswith("failover_") or f.startswith("failover_ob_")) and f.endswith(".parquet")
                 ]) if hasattr(storage_engine, "failover_dir") else 0
             else:
                 status["db_connected"] = True
                 status["buffer_size"] = sum(len(b) for b in getattr(storage_engine, "buffers", {}).values())
+                status["ob_buffer_size"] = 0
                 status["failover_files_count"] = 0
                 
             status_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'collector_status.json')
@@ -187,8 +215,8 @@ def main():
         # 🔥 最后的清理：显式释放大对象和垃圾回收
         if quote_ctx:
             del quote_ctx
-        if handler:
-            del handler
+        for h in handlers:
+            del h
         del storage_engine
         del storage_thread
         gc.collect()  # 最后的垃圾回收

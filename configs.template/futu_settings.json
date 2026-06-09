@@ -12,6 +12,10 @@
     },
     "storage": {
         "engine": "clickhouse",
+        "sub_types": [
+            "TICKER",
+            "ORDER_BOOK"
+        ],
         "base_archive_dir": "./data/archive",
         "base_report_dir": "./data/reports",
         "flush_threshold": 1000,
