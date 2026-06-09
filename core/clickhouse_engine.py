@@ -209,10 +209,8 @@ class ClickHouseStorageEngine:
             dt = datetime.now()
             
         code = ob_dict.get('code', '')
-        if '.US' in code or code.startswith('US.'):
-            dt = self.tz_us.localize(dt)
-        else:
-            dt = self.tz_hk.localize(dt)
+        # ⚠️ 修正：富途服务端接收时间 (svr_recv_time) 固定为北京时间(上海时区)
+        dt = self.tz_hk.localize(dt)
             
         return {
             'code': code,
@@ -416,12 +414,8 @@ class ClickHouseStorageEngine:
                         try:
                             df = pd.read_parquet(file_path)
                             def re_localize_ob(row):
-                                code = row['code']
                                 dt_utc = pytz.utc.localize(row['time'])
-                                if '.US' in code or code.startswith('US.'):
-                                    return dt_utc.astimezone(self.tz_us)
-                                else:
-                                    return dt_utc.astimezone(self.tz_hk)
+                                return dt_utc.astimezone(self.tz_hk)
                             df['time'] = df.apply(re_localize_ob, axis=1)
                             self.client.insert_df(self.ob_full_table_path, df)
                             logger.info(f"⚡ 成功补录 OrderBooks 数据块 {fname} ({len(df)} 条) 到 ClickHouse")
