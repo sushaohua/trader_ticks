@@ -194,23 +194,10 @@ class ClickHouseStorageEngine:
         }
 
     def process_order_book(self, ob_dict):
-        """解析买卖盘口时间戳并本地化时区，组装成 ClickHouse Array 格式"""
-        # 优先使用富途服务端接收时间
-        time_str = ob_dict.get('svr_recv_time_ask') or ob_dict.get('svr_recv_time_bid')
-        if time_str:
-            try:
-                dt = datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S.%f')
-            except ValueError:
-                try:
-                    dt = datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S')
-                except ValueError:
-                    dt = datetime.now()
-        else:
-            dt = datetime.now()
-            
+        """接收实时盘口推送并统一本地化为当前北京时间，确保与 ticks 时间戳对齐"""
+        # 统一使用接收时刻的北京时间，规避富途多服务器时区不一致导致的偏移
+        dt = datetime.now(self.tz_hk)
         code = ob_dict.get('code', '')
-        # ⚠️ 修正：富途服务端接收时间 (svr_recv_time) 固定为北京时间(上海时区)
-        dt = self.tz_hk.localize(dt)
             
         return {
             'code': code,
@@ -324,6 +311,7 @@ class ClickHouseStorageEngine:
             
             df = pd.DataFrame(data_list)
             df['time'] = df['time'].apply(lambda x: x.astimezone(pytz.utc).replace(tzinfo=None))
+            df['time'] = pd.to_datetime(df['time']).dt.floor('ms')
             
             table = pa.Table.from_pandas(df, schema=self.arrow_schema, preserve_index=False)
             pq.write_table(table, file_path)
@@ -344,6 +332,7 @@ class ClickHouseStorageEngine:
             
             df = pd.DataFrame(data_list)
             df['time'] = df['time'].apply(lambda x: x.astimezone(pytz.utc).replace(tzinfo=None))
+            df['time'] = pd.to_datetime(df['time']).dt.floor('ms')
             
             table = pa.Table.from_pandas(df, schema=self.ob_arrow_schema, preserve_index=False)
             pq.write_table(table, file_path)

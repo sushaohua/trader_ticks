@@ -87,8 +87,9 @@ class TestClickHouseEngine(unittest.TestCase):
                 }
                 processed_hk = engine.process_order_book(hk_ob)
                 self.assertEqual(processed_hk['time'].tzinfo.zone, 'Asia/Shanghai')
-                self.assertEqual(processed_hk['time'].hour, 16)
-                self.assertEqual(processed_hk['time'].minute, 8)
+                from datetime import datetime
+                diff = (datetime.now(engine.tz_hk) - processed_hk['time']).total_seconds()
+                self.assertTrue(abs(diff) < 10)
                 self.assertEqual(processed_hk['ask_prices'][0], 453.4)
                 self.assertEqual(processed_hk['bid_volumes'][1], 4000)
 
