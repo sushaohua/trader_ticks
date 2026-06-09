@@ -20,10 +20,15 @@ class FutuTickListener(TickerHandlerBase):
         for _, row in content.iterrows():
             tick_packet = {
                 "code": row['code'],
+                "name": str(row['name']) if 'name' in row else '',
+                "time": str(row['time']) if 'time' in row else '',
                 "price": float(row['price']),
-                "volume": int(row['volume']),
+                "volume": int(row['volume']) if 'volume' in row else 0,
                 "turnover": float(row['turnover']) if 'turnover' in row else float(row['price']*row['volume']),
-                "ticker_direction": str(row['ticker_direction']),
+                "ticker_direction": str(row['ticker_direction']) if 'ticker_direction' in row else 'NEUTRAL',
+                "sequence": int(row['sequence']) if 'sequence' in row else 0,
+                "type": str(row['type']) if 'type' in row else '',
+                "push_data_type": str(row['push_data_type']) if 'push_data_type' in row else '',
                 "bid_price": float(row['bid_price']) if 'bid_price' in row else 0.0,
                 "ask_price": float(row['ask_price']) if 'ask_price' in row else 0.0
             }

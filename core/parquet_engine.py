@@ -65,6 +65,10 @@ class ParquetStorageEngine:
             
         try:
             df = pd.DataFrame(self.buffers[code])
+            # 过滤出 schema 中的字段，确保格式严格一致并向下兼容
+            cols = [field.name for field in self.schema]
+            df = df[cols]
+            
             # 移除显式索引字段，转为 Table 格式时强制应用统一 Schema
             table = pa.Table.from_pandas(df, schema=self.schema, preserve_index=False)
             self.writers[code].write_table(table)

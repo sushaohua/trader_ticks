@@ -87,8 +87,15 @@ def main():
     
     logger.info(f"📡 唤醒收集模块 -> 目标市场: {market} | 监控总标的数量: {len(stocks)}")
     
-    # 初始化入库引擎
-    storage_engine = ParquetStorageEngine(settings, market)
+    # 初始化入库引擎 (根据配置动态加载)
+    engine_type = settings.get("storage", {}).get("engine", "clickhouse").lower()
+    if engine_type == "clickhouse":
+        from core.clickhouse_engine import ClickHouseStorageEngine
+        storage_engine = ClickHouseStorageEngine(settings, market)
+        logger.info("⚡ 成功加载 ClickHouse 存储引擎")
+    else:
+        storage_engine = ParquetStorageEngine(settings, market)
+        logger.info("💾 成功加载 Parquet 存储引擎")
     
     # 启动存储消费者线程
     storage_thread = threading.Thread(target=consumer_storage_worker, args=(storage_engine,), name="StorageThread")
@@ -136,6 +143,32 @@ def main():
             # 🔥 定期垃圾回收（每10秒检查一次）
             if data_queue.empty():
                 gc.collect()
+
+            # 📝 定期更新本地健康状态/心跳文件
+            status = {
+                "last_heartbeat": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                "queue_size": data_queue.qsize(),
+                "engine_type": engine_type,
+            }
+            if engine_type == "clickhouse":
+                status["db_connected"] = getattr(storage_engine, "db_connected", False)
+                with getattr(storage_engine, "lock", threading.Lock()):
+                    status["buffer_size"] = len(getattr(storage_engine, "buffer", []))
+                status["failover_files_count"] = len([
+                    f for f in os.listdir(getattr(storage_engine, "failover_dir", ""))
+                    if f.startswith("failover_") and f.endswith(".parquet")
+                ]) if hasattr(storage_engine, "failover_dir") else 0
+            else:
+                status["db_connected"] = True
+                status["buffer_size"] = sum(len(b) for b in getattr(storage_engine, "buffers", {}).values())
+                status["failover_files_count"] = 0
+                
+            status_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'collector_status.json')
+            try:
+                with open(status_path, 'w', encoding='utf-8') as sf:
+                    json.dump(status, sf, indent=4)
+            except Exception as se:
+                logger.error(f"写入状态心跳文件异常: {se}")
     except (KeyboardInterrupt, SystemExit):
         logger.info("🛑 捕获到终止指令，正在执行优雅停机逻辑...")
     except Exception as e:

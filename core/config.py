@@ -30,4 +30,12 @@ def load_config():
         raise FileNotFoundError(f"Configuration file not found at: {path}")
         
     with open(path, 'r', encoding='utf-8') as f:
-        return json.load(f)
+        config = json.load(f)
+        
+    if "storage" not in config:
+        config["storage"] = {}
+    if "engine" not in config["storage"]:
+        config["storage"]["engine"] = "clickhouse"
+        
+    return config
+

@@ -48,3 +48,7 @@ Thumbs.db
 
 # Ignore local configs directory (managed as a symlink)
 configs
+
+# Ignore local runtime collector status
+data/collector_status.json
+data/clickhouse_failover/
