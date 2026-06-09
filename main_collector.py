@@ -67,6 +67,14 @@ def consumer_storage_worker(engine):
             logger.error(f"❌ 消费者存储线程发生异常: {e}", exc_info=True)
 
 def main():
+    import signal
+    def handle_sigterm(signum, frame):
+        logger.info(f"🛑 收到系统信号 {signum}，触发优雅停机...")
+        raise SystemExit(0)
+    
+    signal.signal(signal.SIGTERM, handle_sigterm)
+    signal.signal(signal.SIGINT, handle_sigterm)
+
     # 解析命令行参数确定要执行哪一个市场的收集
     parser = argparse.ArgumentParser(description="工业级多市场跨时区高频Tick收集引擎")
     parser.add_argument("--market", required=True, choices=["US", "HK", "CN"], help="指定目标收集市场")
