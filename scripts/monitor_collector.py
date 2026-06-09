@@ -44,23 +44,29 @@ def load_local_status():
     except Exception:
         return None
 
-def fetch_db_metrics(ch_config):
-    """从 ClickHouse 远程查询实时指标"""
-    db_name = ch_config.get("database", "stock_preview")
-    table_path = f"{db_name}.ticks"
-    
-    client = None
+def fetch_single_db_metrics(client, db_name):
+    """查询单个数据库 ticks 表的实时指标"""
     try:
-        client = clickhouse_connect.get_client(
-            host=ch_config["host"],
-            port=int(ch_config["port"]),
-            username=ch_config["username"],
-            password=ch_config["password"]
-        )
+        # 使用 system.tables 确保表存在，防范表未创建时报错
+        exists_q = f"SELECT count() FROM system.tables WHERE database = '{db_name}' AND name = 'ticks'"
+        exists = client.query(exists_q).result_rows[0][0] == 1
+        if not exists:
+            return {
+                "exists": False,
+                "rate_1m": 0.0,
+                "rate_5m": 0.0,
+                "active_30s": False,
+                "total_rows": 0,
+                "stocks": []
+            }
+            
+        table_path = f"{db_name}.ticks"
         
-        # 1. 查询最近 1 分钟和 5 分钟的写入数据量
-        # 由于写入是 UTC，我们计算时最好和数据库 time（默认为上海时区）或者 UTC 进行对齐
-        # 考虑到 ClickHouse DDL 中定义了 'Asia/Shanghai'，我们可以使用 now() 对齐
+        # 1. 获取数据库总数据条数
+        q_total = f"SELECT count() FROM {table_path}"
+        total_rows = client.query(q_total).result_rows[0][0]
+        
+        # 2. 查询最近 1 分钟和 5 分钟的写入数据量
         q_rates = f"""
         SELECT 
             countIf(time >= now() - INTERVAL 1 MINUTE) as cnt_1m,
@@ -71,9 +77,14 @@ def fetch_db_metrics(ch_config):
         rate_1m = round(rates_res[0] / 60.0, 2)
         rate_5m = round(rates_res[1] / 300.0, 2)
         
-        # 2. 查询今日各标的的最新 Tick 时间和总条数
+        # 3. 检查最近 30 秒总写入数，用于判断是否断流
+        q_30s = f"SELECT count() FROM {table_path} WHERE time >= now() - INTERVAL 30 SECOND"
+        cnt_30s = client.query(q_30s).result_rows[0][0]
+        
+        # 4. 查询今日各标的的最新 Tick 时间和总条数
         q_stocks = f"""
         SELECT 
+            '{db_name}' as db,
             code,
             max(time) as last_time,
             count() as total_count
@@ -81,35 +92,83 @@ def fetch_db_metrics(ch_config):
         WHERE time >= today()
         GROUP BY code
         ORDER BY last_time DESC
-        LIMIT 20
+        LIMIT 15
         """
         stocks_res = client.query(q_stocks).result_rows
         
-        # 3. 检查最近 30 秒总写入数，用于判断是否断流
-        q_30s = f"SELECT count() FROM {table_path} WHERE time >= now() - INTERVAL 30 SECOND"
-        cnt_30s = client.query(q_30s).result_rows[0][0]
-        
-        # 4. 获取数据库总数据条数
-        q_total = f"SELECT count() FROM {table_path}"
-        total_rows = client.query(q_total).result_rows[0][0]
-        
         return {
-            "connected": True,
+            "exists": True,
             "rate_1m": rate_1m,
             "rate_5m": rate_5m,
-            "stocks": stocks_res,
             "active_30s": cnt_30s > 0,
             "total_rows": total_rows,
-            "error": None
+            "stocks": stocks_res
+        }
+    except Exception as e:
+        logger_err = f"获取数据库 {db_name} 指标异常: {e}"
+        # 回退为未连接/不存在表
+        return {
+            "exists": False,
+            "rate_1m": 0.0,
+            "rate_5m": 0.0,
+            "active_30s": False,
+            "total_rows": 0,
+            "stocks": [],
+            "error": logger_err
+        }
+
+def fetch_db_metrics(ch_config):
+    """从 ClickHouse 远程查询 stock 与 stock_preview 的实时指标"""
+    client = None
+    try:
+        client = clickhouse_connect.get_client(
+            host=ch_config["host"],
+            port=int(ch_config["port"]),
+            username=ch_config["username"],
+            password=ch_config["password"]
+        )
+        
+        stock_metrics = fetch_single_db_metrics(client, "stock")
+        preview_metrics = fetch_single_db_metrics(client, "stock_preview")
+        
+        # 合并两个库的活跃股票，并按 last_time 降序排序
+        all_stocks = []
+        if stock_metrics["exists"]:
+            all_stocks.extend(stock_metrics["stocks"])
+        if preview_metrics["exists"]:
+            all_stocks.extend(preview_metrics["stocks"])
+            
+        def get_time_key(row):
+            t = row[2]
+            if t is None:
+                return datetime.min.replace(tzinfo=pytz.utc)
+            if t.tzinfo is None:
+                return pytz.timezone('Asia/Shanghai').localize(t)
+            return t
+            
+        all_stocks.sort(key=get_time_key, reverse=True)
+        all_stocks = all_stocks[:20]  # 取前20条
+        
+        # 判断两个数据库连接状态
+        connected = True
+        
+        return {
+            "connected": connected,
+            "dbs": {
+                "stock": stock_metrics,
+                "stock_preview": preview_metrics
+            },
+            "stocks": all_stocks,
+            "error": stock_metrics.get("error") or preview_metrics.get("error")
         }
     except Exception as e:
         return {
             "connected": False,
-            "rate_1m": 0.0,
-            "rate_5m": 0.0,
+            "dbs": {
+                "stock": {"exists": False, "rate_1m": 0.0, "rate_5m": 0.0, "active_30s": False, "total_rows": 0},
+                "stock_preview": {"exists": False, "rate_1m": 0.0, "rate_5m": 0.0, "active_30s": False, "total_rows": 0}
+            },
             "stocks": [],
-            "active_30s": False,
-            "total_rows": 0,
             "error": str(e)
         }
     finally:
@@ -131,19 +190,38 @@ def generate_dashboard():
     ch_config = settings["clickhouse"]
     metrics = fetch_db_metrics(ch_config)
     
-    # 状态指示灯与主面板色调
+    # 状态指示灯与主面板色调 (以配置文件指定的主数据库为准)
+    primary_db = ch_config.get("database", "stock_preview")
+    primary_metrics = metrics["dbs"].get(primary_db, {"exists": False, "active_30s": False})
+    
     if not metrics["connected"]:
         status_text = f"🔴 无法连接 ClickHouse 数据库 ({ch_config['host']})"
         border_color = "red"
     elif local_status and not local_status.get("db_connected", False):
         status_text = "🟡 数据库断开 (本地正在执行 Parquet 灾备溢出)"
         border_color = "yellow"
-    elif not metrics["active_30s"]:
-        status_text = "🟡 数据流疑似中断 (最近30秒无新Tick写入)"
+    elif primary_metrics.get("exists") and not primary_metrics.get("active_30s"):
+        status_text = f"🟡 数据流疑似中断 (主库 {primary_db} 最近30秒无新Tick)"
         border_color = "yellow"
     else:
-        status_text = "🟢 数据流写入中 (活跃)"
+        status_text = f"🟢 主库 {primary_db} 数据流写入中 (活跃)"
         border_color = "green"
+        
+    # 格式化双库指标对比
+    def get_db_status_line(name, m):
+        if not m.get("exists"):
+            return f"  └─ {name:15} | ❌ [red]未创建或不可达[/red]"
+        active = "🟢 [green]活跃[/green]" if m.get("active_30s") else "⚪ [yellow]空闲/断流[/yellow]"
+        return (
+            f"  └─ {name:15} | 状态: {active} | "
+            f"总行数: [bold green]{m['total_rows']:11,}[/bold green] 行 | "
+            f"速写 TPS (1m/5m): [bold yellow]{m['rate_1m']:5.2f}[/bold yellow] / [bold yellow]{m['rate_5m']:5.2f}[/bold yellow]"
+        )
+        
+    db_lines = []
+    for db_name in ["stock", "stock_preview"]:
+        db_lines.append(get_db_status_line(db_name, metrics["dbs"][db_name]))
+    dbs_compare_text = "\n".join(db_lines)
         
     # 构建顶部指标面板
     local_heartbeat = local_status.get("last_heartbeat", "未知") if local_status else "未启动"
@@ -154,9 +232,9 @@ def generate_dashboard():
     
     summary_text = (
         f"[bold]远程数据库状态[/bold]: {status_text}\n"
-        f"ClickHouse 目标地址: [cyan]{ch_config['host']}:{ch_config['port']}[/cyan] | 数据库: [cyan]{ch_config['database']}[/cyan]\n"
-        f"数据库已存总行数: [bold green]{metrics['total_rows']:,}[/bold green] 行\n"
-        f"实时写入速度: 1分钟均值 [bold yellow]{metrics['rate_1m']}[/bold yellow] Ticks/秒 | 5分钟均值 [bold yellow]{metrics['rate_5m']}[/bold yellow] Ticks/秒\n"
+        f"ClickHouse 目标地址: [cyan]{ch_config['host']}:{ch_config['port']}[/cyan] | 当前配置主库: [cyan]{primary_db}[/cyan]\n"
+        f"[bold]多数据库监控对比[/bold]:\n"
+        f"{dbs_compare_text}\n"
         f"--------------------------------------------------------------------------------\n"
         f"[bold]本地收集进程心跳[/bold]: [cyan]{local_heartbeat}[/cyan] | 存储引擎: [cyan]{engine_type}[/cyan]\n"
         f"线程安全缓冲队列: [bold yellow]{local_queue}[/bold yellow] / 100,000 | 内存 Buffer 大小: [bold yellow]{local_buffer}[/bold yellow] / {settings.get('storage', {}).get('flush_threshold', 1000)}\n"
@@ -164,10 +242,11 @@ def generate_dashboard():
     )
     
     if metrics["error"]:
-        summary_text += f"\n\n[bold red]数据库错误日志[/bold]: {metrics['error']}"
+        summary_text += f"\n\n[bold red]数据库异常日志[/bold]: {metrics['error']}"
         
     # 构建下方标的明细 Table
-    table = Table(title="📊 标的数据明细 (今日活跃前20名)", show_header=True, header_style="bold magenta")
+    table = Table(title="📊 标的数据明细 (双库今日活跃前20名)", show_header=True, header_style="bold magenta")
+    table.add_column("所属数据库", style="magenta", width=15)
     table.add_column("股票代码", style="cyan", width=12)
     table.add_column("最新 Tick 时间 (展示时区)", style="yellow", width=25)
     table.add_column("最后时差 (秒)", justify="right", width=15)
@@ -175,9 +254,7 @@ def generate_dashboard():
     
     now_tz = datetime.now(pytz.timezone('Asia/Shanghai'))
     for row in metrics["stocks"]:
-        code, last_time, total_count = row
-        # 计算最新 Tick 与本地时间的时差
-        # last_time 已经是带有 'Asia/Shanghai' 时区的 datetime (clickhouse-connect 返回)
+        db, code, last_time, total_count = row
         if last_time:
             # 统一转为上海时区计算
             if last_time.tzinfo is None:
@@ -193,12 +270,12 @@ def generate_dashboard():
             diff_str = "N/A"
             time_str = "N/A"
             
-        table.add_row(code, time_str, diff_str, f"{total_count:,}")
+        table.add_row(db, code, time_str, diff_str, f"{total_count:,}")
         
     # 整合面板
     layout = Layout()
     layout.split_column(
-        Layout(Panel(summary_text, title="📡 Trader Ticks 收集器概览", border_style=border_color), size=11),
+        Layout(Panel(summary_text, title="📡 Trader Ticks 收集器双库监控", border_style=border_color), size=12),
         Layout(table)
     )
     return layout
