@@ -73,6 +73,8 @@ def connect_clickhouse(settings):
             turnover_rate Float64,
             change_rate Float64,
             last_close Float64,
+            lot_size UInt32,
+            stock_id UInt64,
             update_time DateTime DEFAULT now()
         ) ENGINE = MergeTree()
         PARTITION BY toYYYYMM(time)
@@ -80,6 +82,11 @@ def connect_clickhouse(settings):
         SETTINGS index_granularity = 8192;
         """
         client.command(stats_ddl)
+        
+        # 兼容旧表升级逻辑
+        client.command(f"ALTER TABLE {full_table} ADD COLUMN IF NOT EXISTS lot_size UInt32")
+        client.command(f"ALTER TABLE {full_table} ADD COLUMN IF NOT EXISTS stock_id UInt64")
+        
         return client, full_table
     except Exception as e:
         logger.error(f"❌ 无法连接 ClickHouse 数据库: {e}")
@@ -118,6 +125,15 @@ def recovery_failover_data(client, full_table):
                     df['time'] = pd.to_datetime(df['time']).dt.date
                     df['update_time'] = pd.to_datetime(df['update_time'])
                     df['volume'] = df['volume'].astype('int64')
+                    
+                    if 'lot_size' not in df.columns:
+                        df['lot_size'] = 0
+                    df['lot_size'] = df['lot_size'].astype('uint32')
+                    
+                    if 'stock_id' not in df.columns:
+                        df['stock_id'] = 0
+                    df['stock_id'] = df['stock_id'].astype('uint64')
+                    
                     client.insert_df(full_table, df)
                     logger.info(f"⚡ 成功补录灾备数据包 {fname} ({len(df)} 条) 到 ClickHouse")
                 os.remove(file_path)
@@ -143,6 +159,53 @@ def load_watchlist(market):
     except Exception as e:
         logger.error(f"❌ 读取 Watchlist 文件 {path} 异常: {e}")
         return []
+
+def fetch_basic_info_map(quote_ctx, code_list):
+    """
+    批量获取指定股票代码的基本信息并返回映射字典：
+    { code: { 'lot_size': lot_size, 'stock_id': stock_id } }
+    """
+    # 交易所映射
+    market_map = {
+        'HK': Market.HK,
+        'US': Market.US,
+        'SH': Market.SH,
+        'SZ': Market.SZ
+    }
+    
+    basic_info = {}
+    if not code_list:
+        return basic_info
+        
+    # 按市场前缀分组以调用 get_stock_basicinfo
+    grouped_codes = {}
+    for code in code_list:
+        parts = code.split('.')
+        if len(parts) == 2:
+            mkt_prefix = parts[0].upper()
+            grouped_codes.setdefault(mkt_prefix, []).append(code)
+            
+    for mkt_prefix, codes in grouped_codes.items():
+        market = market_map.get(mkt_prefix)
+        if not market:
+            logger.warning(f"⚠️ 未知的市场前缀: {mkt_prefix}，跳过获取基本信息")
+            continue
+            
+        logger.info(f"📡 正在批量获取 {mkt_prefix} 市场 {len(codes)} 只股票的基本信息...")
+        time.sleep(0.5)  # 避免限频
+        
+        ret, df = quote_ctx.get_stock_basicinfo(market, SecurityType.STOCK, codes)
+        if ret == RET_OK and not df.empty:
+            for _, row in df.iterrows():
+                c = row['code']
+                basic_info[c] = {
+                    'lot_size': int(row['lot_size']) if 'lot_size' in row and not pd.isna(row['lot_size']) else 0,
+                    'stock_id': int(row['stock_id']) if 'stock_id' in row and not pd.isna(row['stock_id']) else 0
+                }
+        else:
+            logger.error(f"❌ 批量获取 {mkt_prefix} 市场股票基本信息失败: {df}")
+            
+    return basic_info
 
 def main():
     parser = argparse.ArgumentParser(description="日 K 线增量拉取与首次回溯历史收集器")
@@ -196,6 +259,9 @@ def main():
     try:
         quote_ctx = OpenQuoteContext(host=settings["futu_opend"]["host"], port=settings["futu_opend"]["port"])
         logger.info("📡 成功建立富途 OpenD 接口连接")
+        
+        # 批量获取股票基本信息
+        basic_info_map = fetch_basic_info_map(quote_ctx, stocks_to_process)
         
         now = datetime.now()
         end_date_str = now.strftime('%Y-%m-%d')
@@ -268,6 +334,11 @@ def main():
                 df_clean['turnover_rate'] = df['turnover_rate'].astype(float)
                 df_clean['change_rate'] = df['change_rate'].astype(float)
                 df_clean['last_close'] = df['last_close'].astype(float)
+                
+                info = basic_info_map.get(code, {'lot_size': 0, 'stock_id': 0})
+                df_clean['lot_size'] = int(info['lot_size'])
+                df_clean['stock_id'] = int(info['stock_id'])
+                
                 df_clean['update_time'] = datetime.now()
                 
                 # 应用层防重去重：过滤掉 <= max_date 的数据
