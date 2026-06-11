@@ -39,6 +39,7 @@ env/
 
 # Data and logs
 data/logs/*.log
+data/logs/*.pid
 data/archive/*.parquet
 data/archive/**/*.parquet
 
