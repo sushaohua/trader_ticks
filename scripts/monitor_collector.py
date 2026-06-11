@@ -54,13 +54,19 @@ def fetch_single_db_metrics(client, db_name):
         exists_ob_q = f"SELECT count() FROM system.tables WHERE database = '{db_name}' AND name = 'order_books'"
         exists_ob = client.query(exists_ob_q).result_rows[0][0] == 1
         
+        exists_stats_q = f"SELECT count() FROM system.tables WHERE database = '{db_name}' AND name = 'daily_stock_stats'"
+        exists_stats = client.query(exists_stats_q).result_rows[0][0] == 1
+        
         if not exists_ticks:
             return {
                 "exists": False,
                 "ticks_exists": False,
                 "ob_exists": False,
+                "stats_exists": False,
                 "ticks_total": 0,
                 "ob_total": 0,
+                "stats_total": 0,
+                "stats_today": 0,
                 "ticks_rate_1m": 0.0,
                 "ticks_rate_5m": 0.0,
                 "ob_rate_1m": 0.0,
@@ -106,6 +112,13 @@ def fetch_single_db_metrics(client, db_name):
             
             ob_cnt_30s = client.query(f"SELECT count() FROM {ob_table_path} WHERE time >= now() - INTERVAL 30 SECOND").result_rows[0][0]
             ob_active_30s = ob_cnt_30s > 0
+            
+        stats_total = 0
+        stats_today = 0
+        if exists_stats:
+            stats_table_path = f"{db_name}.daily_stock_stats"
+            stats_total = client.query(f"SELECT count() FROM {stats_table_path}").result_rows[0][0]
+            stats_today = client.query(f"SELECT count() FROM {stats_table_path} WHERE update_time >= today()").result_rows[0][0]
             
         # 4. 查询今日各标的的最新 Tick 与 OrderBook 时间、今日总条数
         if exists_ob:
@@ -160,8 +173,11 @@ def fetch_single_db_metrics(client, db_name):
             "exists": True,
             "ticks_exists": True,
             "ob_exists": exists_ob,
+            "stats_exists": exists_stats,
             "ticks_total": ticks_total,
             "ob_total": ob_total,
+            "stats_total": stats_total,
+            "stats_today": stats_today,
             "ticks_rate_1m": ticks_rate_1m,
             "ticks_rate_5m": ticks_rate_5m,
             "ob_rate_1m": ob_rate_1m,
@@ -176,8 +192,11 @@ def fetch_single_db_metrics(client, db_name):
             "exists": False,
             "ticks_exists": False,
             "ob_exists": False,
+            "stats_exists": False,
             "ticks_total": 0,
             "ob_total": 0,
+            "stats_total": 0,
+            "stats_today": 0,
             "ticks_rate_1m": 0.0,
             "ticks_rate_5m": 0.0,
             "ob_rate_1m": 0.0,
@@ -238,8 +257,8 @@ def fetch_db_metrics(ch_config):
         return {
             "connected": False,
             "dbs": {
-                "stock": {"exists": False, "ticks_exists": False, "ob_exists": False, "ticks_total": 0, "ob_total": 0, "ticks_rate_1m": 0.0, "ticks_rate_5m": 0.0, "ob_rate_1m": 0.0, "ob_rate_5m": 0.0, "ticks_active_30s": False, "ob_active_30s": False},
-                "stock_preview": {"exists": False, "ticks_exists": False, "ob_exists": False, "ticks_total": 0, "ob_total": 0, "ticks_rate_1m": 0.0, "ticks_rate_5m": 0.0, "ob_rate_1m": 0.0, "ob_rate_5m": 0.0, "ticks_active_30s": False, "ob_active_30s": False}
+                "stock": {"exists": False, "ticks_exists": False, "ob_exists": False, "stats_exists": False, "ticks_total": 0, "ob_total": 0, "stats_total": 0, "stats_today": 0, "ticks_rate_1m": 0.0, "ticks_rate_5m": 0.0, "ob_rate_1m": 0.0, "ob_rate_5m": 0.0, "ticks_active_30s": False, "ob_active_30s": False},
+                "stock_preview": {"exists": False, "ticks_exists": False, "ob_exists": False, "stats_exists": False, "ticks_total": 0, "ob_total": 0, "stats_total": 0, "stats_today": 0, "ticks_rate_1m": 0.0, "ticks_rate_5m": 0.0, "ob_rate_1m": 0.0, "ob_rate_5m": 0.0, "ticks_active_30s": False, "ob_active_30s": False}
             },
             "stocks": [],
             "error": str(e)
@@ -291,9 +310,15 @@ def generate_dashboard():
         else:
             ob_status_str = "OrderBook: [red]未订阅/无盘口表[/red]"
             
+        if m.get("stats_exists"):
+            stats_status_str = f"DailyStats: 🟢 [green]就绪[/green] | 总行: [bold green]{m['stats_total']:11,}[/bold green] 行 | 今日增量: [bold yellow]{m['stats_today']}[/bold yellow] 行"
+        else:
+            stats_status_str = "DailyStats: [red]未创建/未拉取[/red]"
+            
         return (
             f"  └─ {name:15} | Ticks: {ticks_active} | 总行: [bold green]{m['ticks_total']:11,}[/bold green] 行 | TPS: [bold yellow]{m['ticks_rate_1m']:5.2f}[/bold yellow] / [bold yellow]{m['ticks_rate_5m']:5.2f}[/bold yellow]\n"
-            f"                  | {ob_status_str}"
+            f"                  | {ob_status_str}\n"
+            f"                  | {stats_status_str}"
         )
         
     db_lines = []
@@ -382,7 +407,7 @@ def generate_dashboard():
         
     layout = Layout()
     layout.split_column(
-        Layout(Panel(summary_text, title="📡 Trader Ticks 收集器双库监控", border_style=border_color), size=14),
+        Layout(Panel(summary_text, title="📡 Trader Ticks 收集器双库监控", border_style=border_color), size=16),
         Layout(table)
     )
     return layout
