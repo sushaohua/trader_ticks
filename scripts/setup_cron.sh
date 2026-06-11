@@ -29,16 +29,22 @@ if abs(tz_offset - 8.0) < 0.5:
     cron_lines = [
         f"30 21 * * 1-5 {project_root}/scripts/run_us_market.sh",
         f"0 4 * * 2-6 {project_root}/scripts/stop_us_market.sh",
+        f"30 4 * * 2-6 {project_root}/venv/bin/python {project_root}/daily_stats_collector.py --market US >> {project_root}/data/logs/cron_daily_stats.log 2>&1",
         f"30 9 * * 1-5 {project_root}/scripts/run_hk_market.sh",
-        f"0 16 * * 1-5 {project_root}/scripts/stop_hk_market.sh"
+        f"0 16 * * 1-5 {project_root}/scripts/stop_hk_market.sh",
+        f"30 16 * * 1-5 {project_root}/venv/bin/python {project_root}/daily_stats_collector.py --market HK >> {project_root}/data/logs/cron_daily_stats.log 2>&1",
+        f"30 15 * * 1-5 {project_root}/venv/bin/python {project_root}/daily_stats_collector.py --market CN >> {project_root}/data/logs/cron_daily_stats.log 2>&1"
     ]
 elif abs(tz_offset - 0.0) < 0.5:
     print("  -> 匹配到零时区 (UTC/GMT)，自动换算 cron 时间")
     cron_lines = [
         f"30 13 * * 1-5 {project_root}/scripts/run_us_market.sh",
         f"0 20 * * 1-5 {project_root}/scripts/stop_us_market.sh",
+        f"30 20 * * 1-5 {project_root}/venv/bin/python {project_root}/daily_stats_collector.py --market US >> {project_root}/data/logs/cron_daily_stats.log 2>&1",
         f"30 1 * * 1-5 {project_root}/scripts/run_hk_market.sh",
-        f"0 8 * * 1-5 {project_root}/scripts/stop_hk_market.sh"
+        f"0 8 * * 1-5 {project_root}/scripts/stop_hk_market.sh",
+        f"30 8 * * 1-5 {project_root}/venv/bin/python {project_root}/daily_stats_collector.py --market HK >> {project_root}/data/logs/cron_daily_stats.log 2>&1",
+        f"30 7 * * 1-5 {project_root}/venv/bin/python {project_root}/daily_stats_collector.py --market CN >> {project_root}/data/logs/cron_daily_stats.log 2>&1"
     ]
 else:
     print("  -> 其他时区，默认采用北京时间配置并声明 CRON_TZ")
@@ -46,8 +52,11 @@ else:
         "CRON_TZ=Asia/Shanghai",
         f"30 21 * * 1-5 {project_root}/scripts/run_us_market.sh",
         f"0 4 * * 2-6 {project_root}/scripts/stop_us_market.sh",
+        f"30 4 * * 2-6 {project_root}/venv/bin/python {project_root}/daily_stats_collector.py --market US >> {project_root}/data/logs/cron_daily_stats.log 2>&1",
         f"30 9 * * 1-5 {project_root}/scripts/run_hk_market.sh",
-        f"0 16 * * 1-5 {project_root}/scripts/stop_hk_market.sh"
+        f"0 16 * * 1-5 {project_root}/scripts/stop_hk_market.sh",
+        f"30 16 * * 1-5 {project_root}/venv/bin/python {project_root}/daily_stats_collector.py --market HK >> {project_root}/data/logs/cron_daily_stats.log 2>&1",
+        f"30 15 * * 1-5 {project_root}/venv/bin/python {project_root}/daily_stats_collector.py --market CN >> {project_root}/data/logs/cron_daily_stats.log 2>&1"
     ]
 
 cron_content = "# Auto-generated cron schedule for trader_ticks\n" + "\n".join(cron_lines) + "\n"

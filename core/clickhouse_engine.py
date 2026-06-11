@@ -28,8 +28,10 @@ class ClickHouseStorageEngine:
         
         self.table_name = "ticks"
         self.ob_table_name = "order_books"
+        self.stats_table_name = "daily_stock_stats"
         self.full_table_path = f"{self.database}.{self.table_name}"
         self.ob_full_table_path = f"{self.database}.{self.ob_table_name}"
+        self.stats_full_table_path = f"{self.database}.{self.stats_table_name}"
         
         # 存储性能设置
         storage_cfg = config["storage"]
@@ -148,9 +150,33 @@ class ClickHouseStorageEngine:
             """
             client.command(ob_ddl)
             
+            # 3. 自动建 daily_stock_stats 统计表
+            stats_ddl = f"""
+            CREATE TABLE IF NOT EXISTS {self.stats_full_table_path} (
+                code LowCardinality(String),
+                name LowCardinality(String),
+                time Date,
+                open Float64,
+                high Float64,
+                low Float64,
+                close Float64,
+                volume Int64,
+                turnover Float64,
+                pe_ratio Float64,
+                turnover_rate Float64,
+                change_rate Float64,
+                last_close Float64,
+                update_time DateTime DEFAULT now()
+            ) ENGINE = MergeTree()
+            PARTITION BY toYYYYMM(time)
+            ORDER BY (code, time)
+            SETTINGS index_granularity = 8192;
+            """
+            client.command(stats_ddl)
+            
             self.client = client
             self.db_connected = True
-            logger.info(f"✅ 成功连接 ClickHouse 且库表准备就绪:\n  └─ {self.full_table_path}\n  └─ {self.ob_full_table_path}")
+            logger.info(f"✅ 成功连接 ClickHouse 且库表准备就绪:\n  └─ {self.full_table_path}\n  └─ {self.ob_full_table_path}\n  └─ {self.stats_full_table_path}")
             return True
         except Exception as e:
             self.db_connected = False

@@ -214,5 +214,49 @@ class TestClickHouseEngine(unittest.TestCase):
         finally:
             engine.close_all()
 
+    @unittest.skipIf(os.environ.get("SKIP_INTEGRATION_TESTS"), "跳过 ClickHouse 集成测试")
+    def test_daily_stock_stats_integration(self):
+        """真实的 ClickHouse daily_stock_stats 日 K 线建表及写入集成测试"""
+        engine = ClickHouseStorageEngine(self.config, "HK")
+        if not engine.db_connected:
+            self.skipTest("ClickHouse 数据库不可达，跳过集成写入测试。")
+            
+        try:
+            # 验证表是否创建成功
+            exists = engine.client.query(f"EXISTS TABLE {engine.stats_full_table_path}").result_rows[0][0]
+            self.assertEqual(exists, 1)
+            
+            # 写入单条测试日 K 线数据
+            from datetime import date
+            
+            test_df = pd.DataFrame([{
+                'code': 'HK.TEST_DAILY',
+                'name': 'TEST_STK',
+                'time': date(2026, 6, 9),
+                'open': 10.0,
+                'high': 11.0,
+                'low': 9.0,
+                'close': 10.5,
+                'volume': 10000,
+                'turnover': 105000.0,
+                'pe_ratio': 15.5,
+                'turnover_rate': 0.05,
+                'change_rate': 5.0,
+                'last_close': 10.0,
+                'update_time': datetime.now()
+            }])
+            
+            engine.client.insert_df(engine.stats_full_table_path, test_df)
+            
+            # 验证是否写入成功
+            res = engine.client.query(f"SELECT * FROM {engine.stats_full_table_path} WHERE code = 'HK.TEST_DAILY'").result_rows
+            self.assertEqual(len(res), 1)
+            self.assertEqual(res[0][0], "HK.TEST_DAILY")
+            
+            # 清理
+            engine.client.command(f"ALTER TABLE {engine.stats_full_table_path} DELETE WHERE code = 'HK.TEST_DAILY'")
+        finally:
+            engine.close_all()
+
 if __name__ == "__main__":
     unittest.main()

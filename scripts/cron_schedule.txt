@@ -10,3 +10,14 @@ CRON_TZ=Asia/Shanghai
 30 9 * * 1-5 /home/sushaohua/aaa/trader_ticks/scripts/run_hk_market.sh
 0 16 * * 1-5 /home/sushaohua/aaa/trader_ticks/scripts/stop_hk_market.sh
 
+# Daily Stock Stats incremental collection (Beijing time)
+# CN Market (Runs Monday-Friday at 15:30)
+30 15 * * 1-5 python3 /home/sushaohua/aaa/trader_ticks/daily_stats_collector.py --market CN >> /home/sushaohua/aaa/trader_ticks/data/logs/cron_daily_stats.log 2>&1
+
+# HK Market (Runs Monday-Friday at 16:30)
+30 16 * * 1-5 python3 /home/sushaohua/aaa/trader_ticks/daily_stats_collector.py --market HK >> /home/sushaohua/aaa/trader_ticks/data/logs/cron_daily_stats.log 2>&1
+
+# US Market (Runs Tuesday-Saturday at 05:30)
+30 5 * * 2-6 python3 /home/sushaohua/aaa/trader_ticks/daily_stats_collector.py --market US >> /home/sushaohua/aaa/trader_ticks/data/logs/cron_daily_stats.log 2>&1
+
+
